@@ -3,5 +3,6 @@ numpy~=2.2.2
 PyAudio~=0.2.14
 rich~=13.9.4
 pydub~=0.25.1
+pyFFTW~=0.15.0
 windows-curses~=2.4.1; sys_platform == 'win32'
 ollama~=0.4.7
