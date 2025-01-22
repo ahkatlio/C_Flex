@@ -15,17 +15,15 @@ import pyaudio
 
 BASE = os.path.dirname(__file__)
 FFMPEG_BIN = os.path.join(BASE, "ffmpeg", "bin")
-
-# Prepend the local ffmpeg/bin to PATH (Windows pathsep is ';', but Python will handle it):
 os.environ["PATH"] = FFMPEG_BIN + os.pathsep + os.environ.get("PATH", "")
 
-LOCAL_FFMPEG   = os.path.join(BASE, "ffmpeg", "bin", "ffmpeg.exe")
-LOCAL_FFPROBE  = os.path.join(BASE, "ffmpeg", "bin", "ffprobe.exe")  # if present
+LOCAL_FFMPEG = os.path.join(BASE, "ffmpeg", "bin", "ffmpeg.exe")
+LOCAL_FFPROBE = os.path.join(BASE, "ffmpeg", "bin", "ffprobe.exe")
 
 from pydub import AudioSegment
 
 AudioSegment.converter = LOCAL_FFMPEG
-AudioSegment.ffprobe   = LOCAL_FFPROBE
+AudioSegment.ffprobe = LOCAL_FFPROBE
 
 BANNER = r"""
 [bold cyan]
@@ -92,127 +90,193 @@ class AudioPlayer:
         self.audio_segment = None
         self.frame_rate = 44100
         self.channels = 2
-        self.sample_width = 2  # default 16-bit
+        self.sample_width = 2  # bytes
         self.bytes_per_frame = self.channels * self.sample_width
         self.chunk_size = 2048  # frames per chunk
         self.playhead_frames = 0
 
+    def _get_numpy_dtype(self, sample_width):
+        """
+        Returns a NumPy dtype corresponding to the given sample_width (bytes).
+        If it's 24-bit, we do a manual sign-extension approach.
+        """
+        if sample_width == 1:
+            return np.int8
+        elif sample_width == 2:
+            return np.int16
+        elif sample_width == 3:
+            # 24-bit: no built-in numpy dtype for 3-byte int.
+            # We'll handle manually in a helper function (see below).
+            return None
+        elif sample_width == 4:
+            # Typically 32-bit int in PyDub. (Could sometimes be float32, but that is rarer.)
+            # We'll assume int32 here. If your files are truly float32, you might need special logic.
+            return np.int32
+        else:
+            return None
+
+    def _from_24bit_buffer_to_float32(self, data_chunk):
+        """
+        Manual approach to handle 24-bit PCM -> float32.
+        We'll sign-extend each 3-byte sample into 4 bytes, then interpret as int32, then cast to float32.
+        """
+        # data_chunk is raw 3*N bytes. We'll convert in steps:
+        # 1) reshape so each sample is exactly 3 bytes
+        num_samples = len(data_chunk) // 3
+        raw_3bytes = np.frombuffer(data_chunk, dtype=np.uint8).reshape(num_samples, 3)
+
+        # 2) sign-extend to 4 bytes
+        # The top byte is 0x00 or 0xFF depending on sign
+        # If the most significant bit of the 3rd byte is set, fill with 0xFF; otherwise 0x00.
+        sign_extended = np.zeros((num_samples, 4), dtype=np.uint8)
+
+        # Copy the 3 raw bytes
+        sign_extended[:, :3] = raw_3bytes
+
+        # Identify which samples are negative:
+        # if the top bit of the last byte is set => negative
+        # So if raw_3bytes[:,2] & 0x80 != 0 => fill with 0xFF
+        negatives = (raw_3bytes[:, 2] & 0x80) != 0
+        sign_extended[negatives, 3] = 0xFF
+
+        # Now interpret sign_extended as int32
+        int32_array = sign_extended.view(dtype=np.int32)
+
+        # Finally, cast to float32
+        return int32_array.astype(np.float32)
+
     def _playback_loop(self):
-        """
-        Runs in a separate thread:
-          - Feeds audio chunks to the output stream
-          - Performs FFT on the same chunks
-        """
-        # Convert entire track to raw bytes once
-        # We do software volume by scaling samples if volume < 200
         raw_data = self.audio_segment.raw_data
         total_frames = len(raw_data) // self.bytes_per_frame
+
+        # Figure out how to interpret each chunk:
+        # if sample_width==3 => use custom code, else standard np.frombuffer
+        dtype = self._get_numpy_dtype(self.sample_width)
 
         while not self.stop_thread.is_set():
             if self.paused:
                 time.sleep(0.05)
                 continue
 
-            # If we reached the end, stop
             if self.playhead_frames >= total_frames:
                 break
 
-            # Grab the next chunk
             start_frame = self.playhead_frames
             end_frame = min(self.playhead_frames + self.chunk_size, total_frames)
             chunk_frames = end_frame - start_frame
 
             start_byte = start_frame * self.bytes_per_frame
             end_byte = end_frame * self.bytes_per_frame
-
             data_chunk = raw_data[start_byte:end_byte]
 
-            # Convert to NumPy array for FFT, volume scaling
-            # Our sample_width=2 means 16-bit signed
-            # We'll convert it to float32 for processing
-            chunk_array = np.frombuffer(data_chunk, dtype=np.int16).astype(np.float32)
+            # Convert raw chunk into float32 samples for FFT:
+            if self.sample_width == 3:
+                # 24-bit
+                chunk_array = self._from_24bit_buffer_to_float32(data_chunk)
+            else:
+                # 8-bit, 16-bit, 32-bit
+                chunk_array = np.frombuffer(data_chunk, dtype=dtype).astype(np.float32)
 
-            # Do a simple software volume by scaling
-            # volume range is [0..200], so 100 is "normal"
+            # Do software volume scaling: [0..200], 100 => 1.0
             volume_scale = self.volume / 100.0
             chunk_array *= volume_scale
 
-            # Write the scaled chunk to PyAudio
-            # Convert back to int16
-            chunk_int16 = chunk_array.astype(np.int16).tobytes()
-            if self.stream is not None:
-                self.stream.write(chunk_int16)
+            # Write scaled PCM back to PyAudio
+            # We must convert from float32 -> the original integer format that PyAudio expects.
+            if self.sample_width == 3:
+                # We stored it as float, but we have to convert back to *3-byte* PCM.
+                # That’s awkward. Easiest solution: open a 32-bit PyAudio stream instead for 24-bit content.
+                # For demonstration, let's just forcibly open a 32-bit stream if sample_width=3.
+                # So we do float32->int32, and write 4 bytes per sample
+                chunk_int32 = chunk_array.astype(np.int32).tobytes()
+                if self.stream is not None:
+                    self.stream.write(chunk_int32)
+            else:
+                # Convert float32 back to the original integer dtype
+                # e.g. if sample_width=2 => int16
+                out_dtype = dtype
+                scaled_int = chunk_array.astype(out_dtype).tobytes()
+                if self.stream is not None:
+                    self.stream.write(scaled_int)
 
-            # If stereo, mix down to mono for FFT
+            # If stereo, mix down to mono for the FFT
             if self.channels == 2:
-                chunk_array = chunk_array.reshape(-1, 2).mean(axis=1)
+                # chunk_array is shape (2 * chunk_frames,) if sample_width != 3
+                # so let's reshape with your channel count
+                chunk_array = chunk_array.reshape(-1, self.channels).mean(axis=1)
 
-            # Compute FFT for visualization
-            fft_result = np.abs(np.fft.fft(chunk_array)[:len(chunk_array) // 2])
-            spectrum = fft_result[:50]  # keep first 50 bins
+            fft_result = np.abs(np.fft.fft(chunk_array)[: len(chunk_array) // 2])
+            spectrum = fft_result[:50]
 
             if len(spectrum) > 0 and np.max(spectrum) > 0:
                 spectrum = spectrum / np.max(spectrum)
 
-            # Smooth with previous
             spectrum = (spectrum * self.smoothing) + (self.last_spectrum * (1 - self.smoothing))
             self.last_spectrum = spectrum.copy()
 
             # Bass boost
             spectrum[:15] *= self.bass_boost
-            # Trivial "beat" check
+            # Basic "beat"
             if np.mean(spectrum[:10]) > self.beat_threshold:
                 spectrum *= 1.2
 
             with self.lock:
                 self.visualizer_data = spectrum
 
-            # Advance playhead
             self.playhead_frames += chunk_frames
 
-        # End of track or stop triggered
+        # End of track
         self.playing = False
         self.paused = False
         self.stop_stream()
 
     def play(self, file_path=None):
-        """Start playing the given file (MP3)."""
         if file_path:
-            self.stop()  # stop any previous playback
-
+            self.stop()  # Stop previous
             self.current_file = os.path.abspath(file_path)
             try:
-                # Decode entire MP3 with pydub
-                self.audio_segment = AudioSegment.from_file(self.current_file,
-                                                            format="mp3",
-                                                            ffmpeg_path=LOCAL_FFMPEG,
-                                                            ffprobe_path=LOCAL_FFPROBE
-                                                            )
+                # Load via pydub
+                self.audio_segment = AudioSegment.from_file(
+                    self.current_file,
+                    format="mp3",
+                    ffmpeg_path=LOCAL_FFMPEG,
+                    ffprobe_path=LOCAL_FFPROBE
+                )
                 self.channels = self.audio_segment.channels
                 self.frame_rate = self.audio_segment.frame_rate
                 self.sample_width = self.audio_segment.sample_width
                 self.bytes_per_frame = self.channels * self.sample_width
 
-                # Duration in seconds
                 self.cached_duration = len(self.audio_segment) / 1000.0
 
-                # Open a PyAudio stream for playback
+                # For PyAudio's format, we can do:
+                #   pyaudio.paInt8 for sample_width=1
+                #   pyaudio.paInt16 for sample_width=2
+                #   pyaudio.paInt24 for sample_width=3 (rarely supported)
+                #   pyaudio.paInt32 for sample_width=4
+                #
+                # But for robust 24-bit support, you might need paInt24.
+                # Not all systems have it, so let's fallback to 32 if needed.
+
+                if self.sample_width == 3:
+                    # We'll open a 32-bit stream. (Or if your PyAudio build supports paInt24, you can use that.)
+                    pyaudio_format = pyaudio.paInt32
+                else:
+                    pyaudio_format = self.p.get_format_from_width(self.sample_width)
+
                 self.stream = self.p.open(
-                    format=self.p.get_format_from_width(self.sample_width),
+                    format=pyaudio_format,
                     channels=self.channels,
                     rate=self.frame_rate,
                     output=True
                 )
 
-                # Reset states
                 self.playing = True
                 self.paused = False
                 self.playhead_frames = 0
                 self.stop_thread.clear()
 
-                # Start background thread to feed audio + do FFT
-                self.update_thread = threading.Thread(target=self._playback_loop)
-                self.update_thread.daemon = True
+                self.update_thread = threading.Thread(target=self._playback_loop, daemon=True)
                 self.update_thread.start()
 
                 return True
@@ -223,12 +287,10 @@ class AudioPlayer:
         return False
 
     def pause(self):
-        """Toggle pause."""
         if self.playing:
             self.paused = not self.paused
 
     def stop(self):
-        """Stop playback."""
         if self.playing or self.paused:
             self.stop_thread.set()
             if self.update_thread:
@@ -240,36 +302,30 @@ class AudioPlayer:
                 self.visualizer_data[:] = 0
 
     def stop_stream(self):
-        """Close PyAudio stream if open."""
         if self.stream is not None:
             self.stream.stop_stream()
             self.stream.close()
             self.stream = None
 
     def get_position(self):
-        """Return current playback time in seconds."""
         if not self.playing and not self.paused:
             return 0
-
-        # If we know how many frames we've played, that’s our position
         return self.playhead_frames / float(self.frame_rate) if self.frame_rate else 0
 
     def set_volume(self, volume):
-        """Set volume [0..200], software scaling."""
         self.volume = max(0, min(200, volume))
 
     def cleanup(self):
-        """Cleanup resources."""
         self.stop()
         if self.p is not None:
             self.p.terminate()
             self.p = None
 
 
+# Everything below here is the same UI logic as before
 def draw_visualizer(stdscr, y, height, width, data):
     if data is None or not isinstance(data, np.ndarray) or len(data) == 0:
         return
-
     try:
         max_height = height - 4
         vis_width = (width - 6) // 3
@@ -278,32 +334,25 @@ def draw_visualizer(stdscr, y, height, width, data):
         for x, magnitude in enumerate(data):
             if x >= vis_width:
                 break
+            magnitude_val = float(magnitude)
+            bar_height = int(magnitude_val * max_height * 2.0)
+            bar_height = min(bar_height, max_height)
 
-            try:
-                magnitude_val = float(magnitude)
-                bar_height = int(magnitude_val * max_height * 2.0)
-                bar_height = min(bar_height, max_height)
+            for h in range(bar_height):
+                if x < 15:  # Bass
+                    color = 4
+                elif x < 30:  # Mid
+                    color = 3
+                else:  # High
+                    color = 6
 
-                for h in range(bar_height):
-                    # Color by frequency
-                    if x < 15:  # Bass
-                        color = 4
-                    elif x < 30:  # Mid
-                        color = 3
-                    else:  # High
-                        color = 6
-
-                    char = "█" if magnitude_val > 0.7 else "▓" if magnitude_val > 0.4 else "▒"
-
-                    stdscr.addstr(
-                        y + max_height - h,
-                        start_x + x * 2,
-                        char,
-                        curses.color_pair(color) | curses.A_BOLD
-                    )
-            except (ValueError, TypeError):
-                continue
-
+                char = "█" if magnitude_val > 0.7 else "▓" if magnitude_val > 0.4 else "▒"
+                stdscr.addstr(
+                    y + max_height - h,
+                    start_x + x * 2,
+                    char,
+                    curses.color_pair(color) | curses.A_BOLD
+                )
     except curses.error:
         pass
 
@@ -335,8 +384,7 @@ def draw_progress_bar(stdscr, y, width, progress, duration):
 
         percentage_str = f" {percentage}% "
         percentage_pos = 13 + min(filled, bar_width - len(percentage_str))
-        stdscr.addstr(y, percentage_pos, percentage_str,
-                      curses.color_pair(7) | curses.A_BOLD)
+        stdscr.addstr(y, percentage_pos, percentage_str, curses.color_pair(7) | curses.A_BOLD)
 
     except curses.error:
         pass
@@ -349,7 +397,6 @@ def draw_controls(stdscr, y, width):
         ("🔊", "↑↓", "Volume"),
         ("🚪", "Q", "Quit")
     ]
-
     x = 2
     try:
         for symbol, key, action in controls:
@@ -363,9 +410,7 @@ def draw_volume_meter(stdscr, y, x, volume):
     try:
         height = 7
         width = 3
-
-        box_chars = {'tl': '╔', 'tr': '╗', 'bl': '╚', 'br': '╝',
-                     'h': '═', 'v': '║'}
+        box_chars = {'tl': '╔', 'tr': '╗', 'bl': '╚', 'br': '╝', 'h': '═', 'v': '║'}
 
         stdscr.addstr(y, x, box_chars['tl'] + box_chars['h'] * width + box_chars['tr'], curses.color_pair(6))
         for i in range(1, height - 1):
@@ -387,7 +432,6 @@ def draw_volume_meter(stdscr, y, x, volume):
                 stdscr.addstr(y + 1 + i, x + 2, "█", curses.color_pair(color))
             else:
                 stdscr.addstr(y + 1 + i, x + 2, "░", curses.color_pair(1))
-
     except curses.error:
         pass
 
@@ -429,8 +473,8 @@ def play_audio_ui(stdscr, player):
                     progress = player.get_position() / player.cached_duration
                 else:
                     progress = 0.0
-
                 draw_progress_bar(stdscr, height - 4, width, progress, player.cached_duration)
+
                 draw_volume_meter(stdscr, height - 12, width - 12, player.volume)
                 draw_controls(stdscr, height - 2, width)
 
@@ -459,16 +503,13 @@ def play_audio_ui(stdscr, player):
 
 
 def browse_files(stdscr):
-    # Same file-browsing code as before
     current_dir = os.path.dirname(os.path.abspath(__file__))
     selected = 0
     offset = 0
-
     while True:
         try:
             height, width = stdscr.getmaxyx()
             stdscr.clear()
-
             try:
                 entries = os.listdir(current_dir)
                 files = [".."] + sorted(
