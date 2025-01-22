@@ -78,12 +78,12 @@ class CursesMusicUI:
         Returns True if input indicates to break out of the playback loop.
         """
         match c:
-            case ord(' '):
+            case p if p == ord(' '):
                 self.audio_service.pause()
-            case ord('s'):
+            case s if s == ord('s'):
                 self.audio_service.stop()
                 return True  # Breaks the playback loop
-            case ord('q'):
+            case q if q == ord('q'):
                 self.audio_service.stop()
                 stdscr.clear()
                 stdscr.refresh()
@@ -221,9 +221,9 @@ class CursesMusicUI:
                 return self._handle_key_up(selected_index, offset)
             case curses.KEY_DOWN:
                 return self._handle_key_down(selected_index, offset, max_display, len(files))
-            case ord('\n'):
+            case k if k == ord('\n'):
                 return self._handle_key_enter(files, selected_index, current_dir)
-            case ord('q'):
+            case q if q == ord('q'):
                 return self._handle_key_quit(stdscr)
             case _:
                 return {}
