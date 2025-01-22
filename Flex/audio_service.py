@@ -42,7 +42,10 @@ class AudioService:
         self.current_file = None
         self.is_playing = False
         self.is_paused = False
-        self.stop_event = threading.Event()
+
+        # Introduce separate audio callback and analysis thread events
+        self.callback_stop_event = threading.Event()
+        self.analysis_stop_event = threading.Event()
 
         # Audio parameters
         self.volume = 50  # Volume percentage (0 to 200); 100 is normal.
@@ -115,7 +118,6 @@ class AudioService:
             self.current_file = os.path.abspath(file_path)
             audio_segment = AudioSegment.from_file(
                 self.current_file,
-                format="mp3",
                 ffmpeg_path=LOCAL_FFMPEG,
                 ffprobe_path=LOCAL_FFPROBE
             )
@@ -137,7 +139,7 @@ class AudioService:
 
             # Reset playback pointer and clear stop signal.
             self.playhead_frames = 0
-            self.stop_event.clear()
+            self.callback_stop_event.clear()
 
             # Setup PyAudio stream in callback mode.
             pyaudio_format = self._get_pyaudio_format(self.sample_width)
@@ -170,7 +172,7 @@ class AudioService:
         if self.is_playing or self.is_paused:
             self.logger.info("Stopping playback.")
             # Signal all loops/threads that they should stop.
-            self.stop_event.set()
+            self.callback_stop_event.set()
 
             # Stop and close the PyAudio stream if it's open.
             if self.audio_stream is not None:
@@ -220,6 +222,8 @@ class AudioService:
         """
         self.logger.info("Cleaning up AudioService resources.")
         self.stop()
+        # Signal analysis thread to terminate.
+        self.analysis_stop_event.set()
         if self.pyaudio_instance is not None:
             self.pyaudio_instance.terminate()
             self.pyaudio_instance = None
@@ -239,8 +243,8 @@ class AudioService:
          - It enqueues data for separate FFT analysis.
          - It minimizes logging to maintain real-time performance.
         """
-        # If a stop has been requested, end the stream.
-        if self.stop_event.is_set():
+        # If a stop has been requested for callback, end the stream.
+        if self.callback_stop_event.is_set():
             return (None, pyaudio.paComplete)
 
         # If paused, return silence.
@@ -313,7 +317,7 @@ class AudioService:
         """
         self.logger.debug("Analysis thread started.")
 
-        while not self.stop_event.is_set():
+        while not self.analysis_stop_event.is_set():
             try:
                 # Wait for the next mono chunk for analysis.
                 mono_chunk = self.analysis_queue.get(timeout=0.1)
@@ -345,7 +349,7 @@ class AudioService:
             indices = np.linspace(0, half_size - 1, 50).astype(int)
             bins_50 = spectrum[indices]
 
-            # # Normalize the bins if possible.
+            # Normalize the bins if possible.
             if bins_50.size > 0:
                 max_val = np.max(bins_50)
                 if max_val > 0:
