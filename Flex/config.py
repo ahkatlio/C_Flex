@@ -6,7 +6,6 @@ from rich.panel import Panel
 from rich import box
 from rich.align import Align
 
-import logging
 
 ###############################################################################
 #                            GLOBAL CONFIG & CONSTANTS
@@ -58,20 +57,3 @@ def show_welcome_screen():
         os.system('cls')
     else:
         os.system('clear')
-
-
-###############################################################################
-#                                 LOGGING
-###############################################################################
-
-
-def configure_logging():
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler("music_player.log"),
-            logging.StreamHandler()
-        ]
-    )
-    return logging.getLogger("MusicPlayerMain")
