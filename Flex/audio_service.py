@@ -65,7 +65,7 @@ class AudioService:
         self.visualizer_data = np.zeros(50, dtype=np.float32)
         self.last_spectrum = np.zeros(50, dtype=np.float32)
         self.smoothing = 0.3
-        self.bass_boost = 2.0
+        self.bass_boost = 2.1
         self.beat_threshold = 0.6
 
         # Initialize PyAudio instance.
@@ -317,6 +317,12 @@ class AudioService:
         """
         self.logger.debug("Analysis thread started.")
 
+        # Normalization constants
+        alpha = 0.88  # Smoothing factor for persistent_max
+        noise_threshold = 1e-1  # Threshold for noise floor
+        # Normalization variables
+        persistent_max = 1e-6  # Initialize with a small value to avoid division by zero.
+        baseline_value = 1e-3  # Adjust this value based on testing and preference.
         while not self.analysis_stop_event.is_set():
             try:
                 # Wait for the next mono chunk for analysis.
@@ -349,32 +355,46 @@ class AudioService:
             indices = np.linspace(0, half_size - 1, 50).astype(int)
             bins_50 = spectrum[indices]
 
-            # Normalize the bins if possible.
+            # Update the persistent maximum using exponential smoothing.
+            current_max = np.max(bins_50)
+            if current_max > persistent_max:
+                # Fast attack: immediately adapt to a louder signal.
+                persistent_max = current_max
+            else:
+                # Slow release: gradually decrease persistent_max.
+                persistent_max = alpha * persistent_max + (1 - alpha) * current_max
+
+            # Use baseline_value to avoid over-amplification
+            effective_max = max(persistent_max, baseline_value)
+
+            if effective_max > noise_threshold:
+                # Only normalize if the maximum exceeds the noise threshold.
+                bins_50 = bins_50 / effective_max
+            else:
+                # If below the threshold, consider it silence.
+                bins_50 = np.zeros_like(bins_50)
+
             if bins_50.size > 0:
-                max_val = np.max(bins_50)
-                if max_val > 0:
-                    bins_50 = bins_50 / max_val
+                # Smooth the spectrum using the previous spectrum.
+                smoothed = (bins_50 * self.smoothing) + \
+                           (self.last_spectrum[:bins_50.size] * (1 - self.smoothing))
+                # Update the last_spectrum for next iteration.
+                self.last_spectrum[:bins_50.size] = smoothed
 
-            # Smooth the spectrum using the previous spectrum.
-            smoothed = (bins_50 * self.smoothing) + \
-                       (self.last_spectrum[:bins_50.size] * (1 - self.smoothing))
-            # Update the last_spectrum for next iteration.
-            self.last_spectrum[:bins_50.size] = smoothed
+                # Apply a bass boost to the first 15 bins.
+                smoothed[:15] *= self.bass_boost
 
-            # Apply a bass boost to the first 15 bins.
-            smoothed[:15] *= self.bass_boost
+                # Simple beat detection: if the mean of the first 10 bins exceeds a threshold,
+                # amplify the spectrum.
+                if np.mean(smoothed[:10]) > self.beat_threshold:
+                    smoothed *= 1.3
 
-            # Simple beat detection: if the mean of the first 10 bins exceeds a threshold,
-            # amplify the spectrum.
-            if np.mean(smoothed[:10]) > self.beat_threshold:
-                smoothed *= 0.7
-
-            # Update visualizer data in a thread-safe way.
-            with self.lock:
-                self.visualizer_data[:bins_50.size] = smoothed
-                # Zero out the remainder if fewer than 50 bins.
-                if bins_50.size < 50:
-                    self.visualizer_data[bins_50.size:] = 0
+                # Update visualizer data in a thread-safe way.
+                with self.lock:
+                    self.visualizer_data[:bins_50.size] = smoothed
+                    # Zero out the remainder if fewer than 50 bins.
+                    if bins_50.size < 50:
+                        self.visualizer_data[bins_50.size:] = 0
 
         self.logger.debug("Analysis thread exiting.")
 
