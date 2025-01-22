@@ -7,7 +7,7 @@ import os
 import inquirer
 import sys
 import subprocess  
-from Flex.AudioPlayer import play_audio 
+from Flex.AudioPlayer import run_music_player
 from Flex.Load import matrix_animation   
 from Wifi_Scan.wifi_scan import start_wifi_scan 
 from Game_Of_Life.Conways_Game_of_Life import start_game_of_life
@@ -95,7 +95,7 @@ def main():
 
         try:
             if "Music Player" in option:
-                run_program("Music Player", play_audio)
+                run_program("Music Player", run_music_player)
             elif "PDF Downloader" in option:
                 run_program("PDF Downloader", lambda: os.system('python Downloader/pdf.py'))
             elif "YouTube Downloader" in option:

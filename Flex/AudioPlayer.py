@@ -579,7 +579,7 @@ def browse_files(stdscr):
             return None
 
 
-def play_audio():
+def run_music_player():
     player = AudioPlayer()
     try:
         show_welcome_screen()
@@ -590,4 +590,4 @@ def play_audio():
 
 
 if __name__ == "__main__":
-    play_audio()
+    run_music_player()
