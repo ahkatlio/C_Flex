@@ -11,3 +11,24 @@ def configure_logging():
         ]
     )
     return logging.getLogger("MusicPlayerMain")
+
+
+class NullLogger:
+    def debug(self, *args, **kwargs):
+        # Meant to be empty
+        pass
+    def info(self, *args, **kwargs):
+        # Meant to be empty
+        pass
+    def warning(self, *args, **kwargs):
+        # Meant to be empty
+        pass
+    def error(self, *args, **kwargs):
+        # Meant to be empty
+        pass
+    def exception(self, *args, **kwargs):
+        # Meant to be empty
+        pass
+    def critical(self, *args, **kwargs):
+        # Meant to be empty
+        pass

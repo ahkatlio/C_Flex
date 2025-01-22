@@ -1,4 +1,4 @@
-from loggers import configure_logging
+from loggers import configure_logging, NullLogger
 
 import curses
 
@@ -9,7 +9,7 @@ from curses_ui import CursesMusicUI
 
 def run_music_player():
     """Main entry point for the music player."""
-    logger = configure_logging()
+    logger = NullLogger()
     logger.info("Starting music player.")
 
     audio_service = AudioService(logger=logger)
