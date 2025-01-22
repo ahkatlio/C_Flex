@@ -47,7 +47,7 @@ class AudioService:
         # Audio parameters
         self.volume = 50  # Volume percentage (0 to 200); 100 is normal.
         self.duration_s = 0.0
-        self.chunk_size = chunk_size
+        self.chunk_size = int(chunk_size)
         self.frame_rate = 44100  # Default sample rate.
         self.channels = 2  # Stereo by default.
         self.sample_width = 2  # In bytes (16-bit samples).
@@ -83,12 +83,12 @@ class AudioService:
         # Setup pyFFTW for efficient FFT processing.
         self.fft_threads = fft_threads
         # Allocate aligned arrays for FFT input and output for performance.
-        self.fft_input = pyfftw.empty_aligned(self.chunk_size, dtype='float32')
-        self.fft_output = pyfftw.empty_aligned(self.chunk_size, dtype='complex64')
+        self.fft_input = pyfftw.empty_aligned((self.chunk_size,), dtype='float32')
         # Pre-build the FFT plan for the given chunk size.
         # This plan will be reused for each FFT computation.
-        self.fft_plan = pyfftw.builders.fft(self.fft_input,
-                                            self.fft_output,
+        self.fft_plan = pyfftw.builders.rfft(self.fft_input,
+                                            # self.fft_output,
+                                            n=self.chunk_size,
                                             threads=self.fft_threads,
                                             overwrite_input=True)
 
@@ -312,6 +312,7 @@ class AudioService:
          - Smooths FFT results and applies bass boost/beat detection for visualization.
         """
         self.logger.debug("Analysis thread started.")
+
         while not self.stop_event.is_set():
             try:
                 # Wait for the next mono chunk for analysis.
@@ -337,12 +338,14 @@ class AudioService:
 
             # Use only the first half of the FFT output (real signal symmetry).
             half_size = self.chunk_size // 2
-            spectrum = np.abs(self.fft_output[:half_size])
+            spectrum = np.abs(self.fft_input[:half_size])
+            spectrum /= (self.chunk_size / 2.0)  # scale down if needed
 
-            # Take the first 50 frequency bins for visualization.
-            bins_50 = spectrum[:50]
+            # Select 50 evenly distributed frequency bins across the spectrum
+            indices = np.linspace(0, half_size - 1, 50).astype(int)
+            bins_50 = spectrum[indices]
 
-            # Normalize the bins if possible.
+            # # Normalize the bins if possible.
             if bins_50.size > 0:
                 max_val = np.max(bins_50)
                 if max_val > 0:
@@ -360,7 +363,7 @@ class AudioService:
             # Simple beat detection: if the mean of the first 10 bins exceeds a threshold,
             # amplify the spectrum.
             if np.mean(smoothed[:10]) > self.beat_threshold:
-                smoothed *= 1.2
+                smoothed *= 0.7
 
             # Update visualizer data in a thread-safe way.
             with self.lock:

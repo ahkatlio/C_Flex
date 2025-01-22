@@ -365,7 +365,8 @@ class CursesMusicUI:
                     break
 
                 val = float(magnitude)
-                bar_height = min(int(val * max_height * 2.0), max_height)
+                # bar_height = min(int(val * max_height * 2.0), max_height)
+                bar_height = min(int(val * max_height), max_height)
 
                 # Determine color and character once per column
                 color = self._get_color_for_index(x_idx)
