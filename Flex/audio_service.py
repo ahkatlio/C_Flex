@@ -3,6 +3,7 @@ import threading
 import time
 import numpy as np
 import pyaudio
+import logging
 from pydub import AudioSegment
 
 # Import from config if you need local ffmpeg references:
@@ -12,13 +13,13 @@ from config import FFMPEG_FOLDER
 LOCAL_FFMPEG = os.path.join(FFMPEG_FOLDER, "ffmpeg.exe")
 LOCAL_FFPROBE = os.path.join(FFMPEG_FOLDER, "ffprobe.exe")
 
-
 class AudioService:
     """
     Handles audio decoding (via pydub), playback (via PyAudio),
     and real-time FFT-based visualization data.
     """
-    def __init__(self, chunk_size=2048):
+    def __init__(self, chunk_size=2048, logger=None):
+        self.logger = logger or logging.getLogger(self.__class__.__name__)
         self.current_file = None
         self.is_playing = False
         self.is_paused = False
@@ -51,10 +52,13 @@ class AudioService:
         self.chunk_size = chunk_size
         self.playhead_frames = 0
 
+        self.logger.debug("AudioService initialized.")
+
     def load_and_play(self, file_path: str) -> bool:
         """
         Decode MP3 via PyDub, open a PyAudio stream, and start background playback + FFT.
         """
+        self.logger.info(f"Loading file: {file_path}")
         self.stop()  # stop previous playback
         try:
             self.current_file = os.path.abspath(file_path)
@@ -93,15 +97,17 @@ class AudioService:
             )
             self.play_thread.start()
 
+            self.logger.info("Playback started successfully.")
             return True
 
         except Exception as exc:
-            print(f"Error loading file {file_path}:\n{exc}")
+            self.logger.error(f"Error loading file {file_path}: {exc}", exc_info=True)
             return False
 
     def stop(self):
         """Stop playback if active."""
         if self.is_playing or self.is_paused:
+            self.logger.info("Stopping playback.")
             self.stop_event.set()
             if self.play_thread:
                 self.play_thread.join()
@@ -115,25 +121,32 @@ class AudioService:
         """Toggle pause."""
         if self.is_playing:
             self.is_paused = not self.is_paused
+            self.logger.info(f"{'Paused' if self.is_paused else 'Resumed'} playback.")
 
     def set_volume(self, volume: int):
         """Volume in [0..200]."""
+        old_volume = self.volume
         self.volume = max(0, min(200, volume))
+        self.logger.debug(f"Volume changed from {old_volume} to {self.volume}.")
 
     def get_playback_position(self) -> float:
         """Returns current playback time in seconds."""
         if not self.is_playing and not self.is_paused:
             return 0.0
-        return float(self.playhead_frames) / float(self.frame_rate)
+        position = float(self.playhead_frames) / float(self.frame_rate)
+        self.logger.debug(f"Current playback position: {position:.2f}s.")
+        return position
 
     def cleanup(self):
         """Cleanup resources on shutdown."""
+        self.logger.info("Cleaning up AudioService resources.")
         self.stop()
         if self.pyaudio_instance is not None:
             self.pyaudio_instance.terminate()
             self.pyaudio_instance = None
 
     def _playback_loop(self):
+        self.logger.info("Playback loop started.")
         raw_data = self.audio_segment.raw_data
         total_frames = len(raw_data) // self.bytes_per_frame
 
@@ -143,7 +156,7 @@ class AudioService:
                 continue
 
             if self.playhead_frames >= total_frames:
-                # End of audio
+                self.logger.info("Reached end of audio.")
                 break
 
             # Next chunk
@@ -191,12 +204,14 @@ class AudioService:
 
             self.playhead_frames += chunk_frames
 
+        self.logger.info("Exiting playback loop.")
         self.is_playing = False
         self.is_paused = False
         self._close_stream()
 
     def _close_stream(self):
         if self.audio_stream:
+            self.logger.debug("Closing audio stream.")
             self.audio_stream.stop_stream()
             self.audio_stream.close()
             self.audio_stream = None
@@ -207,12 +222,12 @@ class AudioService:
         """
         if sample_width == 3:
             # Typically we fallback to 32-bit if paInt24 is unavailable
+            self.logger.debug("24-bit sample width detected, falling back to 32-bit.")
             return pyaudio.paInt32
         return self.pyaudio_instance.get_format_from_width(sample_width)
 
     def _raw_to_float_array(self, data_chunk: bytes) -> np.ndarray:
         """Interpret raw PCM bytes as float32 array."""
-        # Basic approach: handle 1/2/4 byte widths directly.
         if self.sample_width == 1:
             dtype = np.int8
         elif self.sample_width == 2:
@@ -236,7 +251,6 @@ class AudioService:
         # sign extension
         sign_extended = np.zeros((sample_count, 4), dtype=np.uint8)
         sign_extended[:, :3] = raw_3bytes
-        # detect negatives
         neg_mask = (raw_3bytes[:, 2] & 0x80) != 0
         sign_extended[neg_mask, 3] = 0xFF
 
@@ -248,7 +262,6 @@ class AudioService:
         Convert float32 samples back to the original sample_width (int8, int16, etc.)
         """
         if self.sample_width == 3:
-            # We fallback to 32-bit stream
             return float_array.astype(np.int32).tobytes()
         elif self.sample_width == 1:
             return float_array.astype(np.int8).tobytes()
