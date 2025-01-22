@@ -8,7 +8,7 @@ import queue
 from pydub import AudioSegment
 import pyfftw  # For faster FFT operations
 
-from config import FFMPEG_FOLDER
+from .config import FFMPEG_FOLDER
 
 LOCAL_FFMPEG = os.path.join(FFMPEG_FOLDER, "ffmpeg.exe")
 LOCAL_FFPROBE = os.path.join(FFMPEG_FOLDER, "ffprobe.exe")

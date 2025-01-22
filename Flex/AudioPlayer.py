@@ -1,10 +1,10 @@
-from loggers import configure_logging, NullLogger
+from .loggers import configure_logging, NullLogger
 
 import curses
 
-from config import show_welcome_screen
-from audio_service import AudioService
-from curses_ui import CursesMusicUI
+from .config import show_welcome_screen
+from .audio_service import AudioService
+from .curses_ui import CursesMusicUI
 
 
 def run_music_player():

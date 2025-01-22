@@ -3,6 +3,10 @@ import curses
 import logging
 import numpy as np
 
+class QuitMusicPlayerException(Exception):
+    """Exception raised to quit the music player and return to the main menu."""
+    pass
+
 class CursesMusicUI:
     """
     Handles the curses-based UI for file selection and
@@ -120,7 +124,7 @@ class CursesMusicUI:
                 stdscr.refresh()
                 curses.endwin()
                 self.logger.info("Application exited by user.")
-                exit(0)  # Immediately exit the application
+                raise QuitMusicPlayerException  # Immediately exit the application
             case curses.KEY_UP:
                 self.logger.info("Increasing volume.")
                 self.audio_service.set_volume(self.audio_service.volume + 5)
