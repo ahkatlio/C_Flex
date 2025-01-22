@@ -1,6 +1,6 @@
 import curses
 
-from config import show_welcome_screen
+from config import show_welcome_screen, configure_logging
 from audio_service import AudioService
 from curses_ui import CursesMusicUI
 
