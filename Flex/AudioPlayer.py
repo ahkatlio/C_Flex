@@ -4,20 +4,6 @@ from config import show_welcome_screen
 from audio_service import AudioService
 from curses_ui import CursesMusicUI
 
-import logging
-
-
-def configure_logging():
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler("music_player.log"),
-            logging.StreamHandler()
-        ]
-    )
-    return logging.getLogger("MusicPlayerMain")
-
 
 def run_music_player():
     """Main entry point for the music player."""
