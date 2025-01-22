@@ -387,7 +387,7 @@ class AudioService:
                 # Simple beat detection: if the mean of the first 10 bins exceeds a threshold,
                 # amplify the spectrum.
                 if np.mean(smoothed[:10]) > self.beat_threshold:
-                    smoothed *= 1.3
+                    smoothed *= 1.24
 
                 # Update visualizer data in a thread-safe way.
                 with self.lock:
