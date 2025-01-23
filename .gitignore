@@ -1,2 +1,4 @@
 *.exe
+*.pyc
 Flex/ffmpeg/bin
+__pycache__/
