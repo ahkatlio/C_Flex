@@ -314,6 +314,101 @@ class AudioService:
          - Offloading FFT to a separate thread prevents blocking the audio callback.
          - Uses pyFFTW for speed.
          - Smooths FFT results and applies bass boost/beat detection for visualization.
+         - Normalization uses several parameters to dynamically adjust what is considered the
+           upper bound for use in normalization
+
+        Notes on Normalization:
+        - Normalization ensures that the amplitude of audio signals is scaled appropriately to fit within
+          a consistent visual range, allowing the visualizer to display meaningful and proportionate
+          representations of the audio's frequency spectrum, regardless of the song's inherent
+          volume variations.
+        - Key Components and Parameters:
+            - Persistent Maximum (persistent_max)
+            - Baseline Value (baseline_value)
+            - Noise Threshold (noise_threshold)
+            - Smoothing Factor (alpha)
+            - Fast Attack/Slow Release Mechanism
+        - Interplay between components:
+          1. Normalization Flow
+            - Compute maximum amplitude (current_max) from the selected FFT bins (bins_50)
+            - Update persistent_max using the Fast Attack / Slow Release mechanism
+            - Determine effective_max to ensure that normalization does not amplify signals below the baseline_value
+            - Apply the noise_threshold to decide whether to normalize or consider the chunk as silence
+          2. Handling Different Audio Scenarios
+            - Quiet Beginnings:
+              - Challenge: Initial persistent_max is low, risking over-amplification of faint audio
+              - Solution: baseline_value ensures that normalization does not excessively scale up low-amplitude signals
+            - Loud Starts:
+              - Challenge: Sudden high amplitudes can skew normalization, making subsequent quieter passages
+                appear too quiet
+              - Solution:
+                  - Fast Attack quickly updates persistent_max to the high amplitude, preventing the
+                  over-amplification of subsequent low-amplitude chunks
+                  - Slow Release then gradually lowers persistent_max as the audio returns to quieter levels
+            - Dynamic Range in Audio:
+              - Challenge: Songs with varying temporal dynamics can cause inconsistent visual representations
+              - Solution: The combination of persistent_max, baseline_value, noise_threshold, and the
+                Fast Attack/Slow Release mechanism maintains a balanced normalization, aiming to reflect the
+                audio's dynamic range without erratic visual spikes or dips
+        - Additional Notable Parameters:
+          - smoothing: Affects how much the current FFT data influences the visualizer compared to previous
+            states, contributing to the overall stability of the visualization
+          - bass_boost: enhances lower frequencies, making bass lines more visible
+          - beat_threshold: works in tandem with bass frequencies to detect beats, influencing dynamic
+            visual effects like pulsating bars
+        - Design Rationale:
+          1. Dynamic Normalization:
+            - Flexibility: Adapts to varying audio levels, ensuring the visualizer remains responsive and accurate
+              across different songs with diverse dynamics
+            - Stability: Prevents erratic visual behavior by maintaining consistent scaling, avoiding spikes during
+              quiet sections and ensuring that loud passages do not cause subsequent quiet sections to appear too
+              subdued
+          2. Preventing Over-Amplification:
+            - Baseline Enforcement: By introducing a baseline_value, the system avoids excessive scaling of
+              low-amplitude signals, which can make quiet audio misleadingly prominent in the visualization
+            - Noise Suppression: The noise_threshold filters out insignificant signals, ensuring that the
+              visualizer focuses on meaningful audio data
+          3. Enhanced Visualization Features:
+            - Smoothing: Provides a more aesthetically pleasing and les jittery visual output by averaging
+              changes over time
+            - Bass Boost and Beat Detection: Adds depth and dynamism to the visualization, making it more engaging
+              by highlighting bass frequencies and rhythmic elements
+          4. Performance Considerations:
+            - Thread-Safe Updates: Using locks (self.lock) ensures that the visualizer data is updated safely across
+              multiple threads without race conditions
+            - Efficient Computation: Using pyFFTW for FFT operations and minimizing computational overhead
+              in the callback ensures low-latency and real-time performance
+
+        Normalization Flow Diagram:
+        [FFT Computation]
+                |
+                V
+        [Select 50 Frequency Bins (bins_50)]
+                |
+                V
+        [Compute current_max]
+                |
+                V
+        [Update persistent_max]
+                |        \
+              Fast     Slow
+              Attack   Release
+                |        |
+                V        V
+        [Determine effective_max = max(persistent_max, baseline_value)]
+                |
+                V
+        [Check if effective_max > noise_threshold]
+                / \
+              Yes   No
+              /       \
+        [Normalize] [Set bins_50 to 0]
+              |
+              V
+        [Smoothing & Visualization Processing]
+              |
+              V
+        [Update visualizer_data]
         """
         self.logger.debug("Analysis thread started.")
 
@@ -361,7 +456,7 @@ class AudioService:
                 # Fast attack: immediately adapt to a louder signal.
                 persistent_max = current_max
             else:
-                # Slow release: gradually decrease persistent_max.
+                # Slow release: gradually decrease persistent_max towards current_max
                 persistent_max = alpha * persistent_max + (1 - alpha) * current_max
 
             # Use baseline_value to avoid over-amplification
