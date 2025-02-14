@@ -79,6 +79,7 @@ def main():
                     "📄 PDF Downloader 📄",
                     "📺 YouTube Downloader 📺",
                     "🤖 AI Chat 🤖",
+                    "🔍 AI Math Solver 🔍",
                     "🪟 Windows Utilizer 🪟", 
                     "📶 Wi-Fi Scanner 📶",  
                     "🎮 Game of Life 🎮", 
@@ -102,6 +103,8 @@ def main():
                 run_program("YouTube Downloader", lambda: os.system('python Downloader/youtube.py'))
             elif "AI Chat" in option:
                 run_program("AI Chat", start_ai_chat)
+            elif "AI Math Solver" in option:
+                run_program("AI Math Solver", lambda: os.system('python AI/AI_Math_Solver.py'))
             elif "Windows Utilizer" in option:
                 run_program("Windows Utilizer", lambda: subprocess.run(['elevate.bat'], shell=True))
             elif "Wi-Fi Scanner" in option:
