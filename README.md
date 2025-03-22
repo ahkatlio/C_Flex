@@ -1,4 +1,4 @@
-Collecting workspace information# C_Flex: A Collection of Whimsical Python Tools
+# C_Flex: A Collection of Whimsical Python Tools
 
 Welcome to C_Flex, an eclectic collection of Python utilities, tools, and experiments that defy categorization. This repository is a playground of creativity where various Python scripts coexist in beautiful chaos.
 
@@ -29,7 +29,7 @@ pip install -r requirements.txt
 
 ### Markdown Previewer
 
-A beautiful terminal-based markdown file browser and previewer with Discord-inspired theme.
+A beautiful terminal-based markdown file browser and previewer.
 
 ```bash
 python Flex/markdown_preview_app.py
@@ -39,9 +39,6 @@ python Flex/markdown_preview_app.py
 - File system navigation with emoji indicators
 - Rich markdown rendering with syntax highlighting
 - Keyboard navigation (arrow keys, Enter to select)
-- Discord-inspired dark theme
-
-![Markdown Previewer Screenshot]
 
 ### AI Tools
 
