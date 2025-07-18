@@ -4,7 +4,7 @@ import curses
 
 from .config import show_welcome_screen
 from .audio_service import AudioService
-from .curses_ui import CursesMusicUI
+from .curses_ui_clean import CursesMusicUI
 
 
 def run_music_player():
