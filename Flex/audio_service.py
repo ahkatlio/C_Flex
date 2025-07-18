@@ -5,6 +5,7 @@ import pyaudio
 import logging
 import threading
 import queue
+import random
 from pydub import AudioSegment
 import pyfftw  # For faster FFT operations
 
@@ -42,6 +43,14 @@ class AudioService:
         self.current_file = None
         self.is_playing = False
         self.is_paused = False
+
+        # Shuffle feature
+        self.shuffle_enabled = False
+        self.current_folder = None
+        self.playlist = []  # List of audio files in current folder
+        self.current_track_index = 0
+        self.auto_advance = True  # Automatically play next track when current ends
+        self.track_finished_callback = None  # Callback for when track finishes
 
         # Introduce separate audio callback and analysis thread events
         self.callback_stop_event = threading.Event()
@@ -112,6 +121,9 @@ class AudioService:
         """
         self.logger.info(f"Loading file: {file_path}")
         self.stop()  # Stop any previous playback.
+
+        # Set up playlist from the folder containing this file
+        self.set_playlist_from_folder(file_path)
 
         try:
             # Load and decode the MP3 file using pydub.
@@ -258,6 +270,9 @@ class AudioService:
         if frames_left <= 0:
             # End of file reached.
             self.logger.info("Reached end of audio (callback).")
+            # Trigger auto-advance if enabled
+            if self.auto_advance and self.track_finished_callback:
+                self.track_finished_callback()
             return (None, pyaudio.paComplete)
 
         # Determine how many frames to send in this callback.
@@ -569,3 +584,87 @@ class AudioService:
 
         # Default to 16-bit conversion.
         return float_array.astype(np.int16).tobytes()
+
+    def toggle_shuffle(self):
+        """Toggle shuffle mode on/off"""
+        self.shuffle_enabled = not self.shuffle_enabled
+        self.logger.info(f"Shuffle {'enabled' if self.shuffle_enabled else 'disabled'}")
+        return self.shuffle_enabled
+
+    def set_playlist_from_folder(self, file_path):
+        """Set up playlist from the folder containing the current file"""
+        folder_path = os.path.dirname(file_path)
+        if folder_path != self.current_folder:
+            self.current_folder = folder_path
+            self.playlist = []
+            
+            try:
+                # Get all audio files in the folder
+                for file in os.listdir(folder_path):
+                    if file.lower().endswith(('.mp3', '.wav', '.flac', '.m4a', '.ogg')):
+                        self.playlist.append(os.path.join(folder_path, file))
+                
+                self.playlist.sort()  # Sort alphabetically
+                self.logger.info(f"Playlist created with {len(self.playlist)} files from {folder_path}")
+                
+                # Find current file index
+                try:
+                    self.current_track_index = self.playlist.index(file_path)
+                except ValueError:
+                    self.current_track_index = 0
+                    
+            except Exception as e:
+                self.logger.error(f"Error creating playlist: {e}")
+                self.playlist = [file_path]
+                self.current_track_index = 0
+
+    def get_next_track(self):
+        """Get the next track based on shuffle setting"""
+        if not self.playlist:
+            return None
+            
+        if self.shuffle_enabled:
+            # Get a random track that's not the current one
+            available_tracks = [track for i, track in enumerate(self.playlist) if i != self.current_track_index]
+            if available_tracks:
+                next_track = random.choice(available_tracks)
+                self.current_track_index = self.playlist.index(next_track)
+                return next_track
+            else:
+                return self.playlist[0] if self.playlist else None
+        else:
+            # Sequential mode
+            self.current_track_index = (self.current_track_index + 1) % len(self.playlist)
+            return self.playlist[self.current_track_index]
+
+    def get_previous_track(self):
+        """Get the previous track based on shuffle setting"""
+        if not self.playlist:
+            return None
+            
+        if self.shuffle_enabled:
+            # In shuffle mode, just pick a random track
+            available_tracks = [track for i, track in enumerate(self.playlist) if i != self.current_track_index]
+            if available_tracks:
+                prev_track = random.choice(available_tracks)
+                self.current_track_index = self.playlist.index(prev_track)
+                return prev_track
+            else:
+                return self.playlist[0] if self.playlist else None
+        else:
+            # Sequential mode
+            self.current_track_index = (self.current_track_index - 1) % len(self.playlist)
+            return self.playlist[self.current_track_index]
+
+    def is_shuffle_enabled(self):
+        """Return current shuffle state"""
+        return self.shuffle_enabled
+
+    def set_track_finished_callback(self, callback):
+        """Set callback to be called when track finishes"""
+        self.track_finished_callback = callback
+
+    def set_auto_advance(self, enabled):
+        """Enable/disable auto-advance to next track"""
+        self.auto_advance = enabled
+        self.logger.info(f"Auto-advance {'enabled' if enabled else 'disabled'}")
