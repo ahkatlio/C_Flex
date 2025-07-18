@@ -17,6 +17,10 @@ class CursesMusicUI:
         self.audio_service = audio_service
         self.logger = logger or logging.getLogger(self.__class__.__name__)
         self.logger.debug("CursesMusicUI initialized.")
+        
+        # Set up auto-advance callback
+        self.audio_service.set_track_finished_callback(self._on_track_finished)
+        self.auto_advance_requested = False
 
     def run_ui(self, stdscr):
         self.logger.info("Starting UI.")
@@ -52,6 +56,22 @@ class CursesMusicUI:
         self.logger.info(f"Entering playback loop for: {file_path}")
         while True:
             try:
+                # Check if auto-advance was requested
+                if self.auto_advance_requested:
+                    self.auto_advance_requested = False
+                    next_track = self.audio_service.get_next_track()
+                    if next_track:
+                        self.logger.info(f"Auto-advancing to: {next_track}")
+                        if self.audio_service.load_and_play(next_track):
+                            file_path = next_track
+                            self._show_message(stdscr, f"Now Playing: {os.path.basename(next_track)}")
+                        else:
+                            self.logger.warning(f"Failed to load next track: {next_track}")
+                            break
+                    else:
+                        self.logger.info("No more tracks to play")
+                        break
+                
                 self._handle_drawing(stdscr, file_path)
                 c = stdscr.getch()
                 self.logger.debug(f"Key pressed: {c}")
@@ -125,6 +145,26 @@ class CursesMusicUI:
                 curses.endwin()
                 self.logger.info("Application exited by user.")
                 raise QuitMusicPlayerException  # Immediately exit the application
+            case r if r == ord('r'):
+                self.logger.info("Shuffle toggled.")
+                shuffle_state = self.audio_service.toggle_shuffle()
+                self._show_message(stdscr, f"Shuffle {'ON' if shuffle_state else 'OFF'}")
+            case a if a == ord('a'):
+                self.logger.info("Auto-advance toggled.")
+                self.audio_service.set_auto_advance(not self.audio_service.auto_advance)
+                self._show_message(stdscr, f"Auto-advance {'ON' if self.audio_service.auto_advance else 'OFF'}")
+            case curses.KEY_RIGHT:
+                self.logger.info("Next track requested.")
+                next_track = self.audio_service.get_next_track()
+                if next_track:
+                    self.audio_service.load_and_play(next_track)
+                    self._show_message(stdscr, f"Playing: {os.path.basename(next_track)}")
+            case curses.KEY_LEFT:
+                self.logger.info("Previous track requested.")
+                prev_track = self.audio_service.get_previous_track()
+                if prev_track:
+                    self.audio_service.load_and_play(prev_track)
+                    self._show_message(stdscr, f"Playing: {os.path.basename(prev_track)}")
             case curses.KEY_UP:
                 self.logger.info("Increasing volume.")
                 self.audio_service.set_volume(self.audio_service.volume + 5)
@@ -369,7 +409,6 @@ class CursesMusicUI:
                     break
 
                 val = float(magnitude)
-                # bar_height = min(int(val * max_height * 2.0), max_height)
                 bar_height = min(int(val * max_height), max_height)
 
                 # Determine color and character once per column
@@ -476,10 +515,16 @@ class CursesMusicUI:
             self.logger.error(f"Curses error when drawing volume meter: {e}")
 
     def _draw_controls(self, stdscr, y, width):
+        shuffle_status = "SHUFFLE ON" if self.audio_service.is_shuffle_enabled() else "SHUFFLE OFF"
+        auto_advance_status = "AUTO ON" if self.audio_service.auto_advance else "AUTO OFF"
         controls = [
             ("⏯️ ", "Space", "Play/Pause"),
             ("⏹️ ", "S", "Stop"),
             ("🔊", "↑↓", "Volume"),
+            ("⏮️ ", "←", "Previous"),
+            ("⏭️ ", "→", "Next"),
+            ("🔀", "R", shuffle_status),
+            ("🔄", "A", auto_advance_status),
             ("🚪", "Q", "Quit")
         ]
         x = 2
@@ -488,6 +533,34 @@ class CursesMusicUI:
                 label = f"{symbol} {key}: {desc}"
                 stdscr.addstr(y, x, label, curses.color_pair(3))
                 x += len(label) + 3
+                if x >= width - 20:  # Start new line if running out of space
+                    y += 1
+                    x = 2
             self.logger.debug("Controls drawn.")
         except curses.error as e:
             self.logger.error(f"Curses error when drawing controls: {e}")
+
+    def _show_message(self, stdscr, message, duration=1.5):
+        """Show a temporary message on screen"""
+        height, width = stdscr.getmaxyx()
+        msg_y = height // 2
+        msg_x = (width - len(message)) // 2
+        
+        try:
+            # Save the current content at that position
+            stdscr.attron(curses.color_pair(5) | curses.A_BOLD)
+            stdscr.addstr(msg_y, msg_x, message)
+            stdscr.attroff(curses.color_pair(5) | curses.A_BOLD)
+            stdscr.refresh()
+            
+            # Show message for specified duration
+            import time
+            time.sleep(duration)
+            
+        except curses.error as e:
+            self.logger.error(f"Curses error when showing message: {e}")
+
+    def _on_track_finished(self):
+        """Callback method triggered when a track finishes playing"""
+        self.logger.info("Track finished, requesting auto-advance")
+        self.auto_advance_requested = True
