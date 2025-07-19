@@ -54,6 +54,8 @@ class CursesMusicUI:
     def _playback_loop(self, stdscr, file_path):
         """Handles the playback loop for the given file path."""
         self.logger.info(f"Entering playback loop for: {file_path}")
+        current_file_path = file_path  # Track the current file being played
+        
         while True:
             try:
                 # Check if auto-advance was requested
@@ -63,7 +65,7 @@ class CursesMusicUI:
                     if next_track:
                         self.logger.info(f"Auto-advancing to: {next_track}")
                         if self.audio_service.load_and_play(next_track):
-                            file_path = next_track
+                            current_file_path = next_track
                             self._show_message(stdscr, f"Now Playing: {os.path.basename(next_track)}")
                         else:
                             self.logger.warning(f"Failed to load next track: {next_track}")
@@ -72,12 +74,24 @@ class CursesMusicUI:
                         self.logger.info("No more tracks to play")
                         break
                 
-                self._handle_drawing(stdscr, file_path)
+                # Check if not playing and not paused (track ended naturally)
+                if not self.audio_service.is_playing and not self.audio_service.is_paused:
+                    self.logger.info("Track ended, triggering auto-advance")
+                    self.auto_advance_requested = True
+                    continue
+                
+                self._handle_drawing(stdscr, current_file_path)
                 c = stdscr.getch()
                 self.logger.debug(f"Key pressed: {c}")
-                if self._handle_input(c, stdscr):
+                
+                # Handle input and check if file path changed
+                should_exit, new_file_path = self._handle_input(c, stdscr)
+                if should_exit:
                     self.logger.info("Exiting playback loop.")
                     break
+                elif new_file_path:
+                    current_file_path = new_file_path
+                    self.logger.info(f"File path updated to: {current_file_path}")
             except KeyboardInterrupt:
                 self.logger.warning("KeyboardInterrupt detected. Stopping audio.")
                 self.audio_service.stop()
@@ -123,10 +137,12 @@ class CursesMusicUI:
         stdscr.refresh()
         self.logger.debug("Screen refreshed.")
 
-    def _handle_input(self, c, stdscr) -> bool:
+    def _handle_input(self, c, stdscr):
         """
         Processes user input during playback.
-        Returns True if input indicates to break out of the playback loop.
+        Returns (should_exit, new_file_path) tuple:
+        - should_exit: True if input indicates to break out of the playback loop
+        - new_file_path: Path to new file if navigation occurred, None otherwise
         """
         self.logger.debug(f"Handling input: {c}")
         match c:
@@ -136,7 +152,7 @@ class CursesMusicUI:
             case s if s == ord('s'):
                 self.logger.info("Stop command received.")
                 self.audio_service.stop()
-                return True  # Breaks the playback loop
+                return True, None  # Breaks the playback loop
             case q if q == ord('q'):
                 self.logger.info("Quit command received.")
                 self.audio_service.stop()
@@ -151,20 +167,26 @@ class CursesMusicUI:
                 self._show_message(stdscr, f"Shuffle {'ON' if shuffle_state else 'OFF'}")
             case a if a == ord('a'):
                 self.logger.info("Auto-advance toggled.")
-                self.audio_service.set_auto_advance(not self.audio_service.auto_advance)
-                self._show_message(stdscr, f"Auto-advance {'ON' if self.audio_service.auto_advance else 'OFF'}")
+                self.audio_service.set_auto_advance(not self.audio_service.get_auto_advance())
+                self._show_message(stdscr, f"Auto-advance {'ON' if self.audio_service.get_auto_advance() else 'OFF'}")
             case curses.KEY_RIGHT:
                 self.logger.info("Next track requested.")
                 next_track = self.audio_service.get_next_track()
                 if next_track:
-                    self.audio_service.load_and_play(next_track)
-                    self._show_message(stdscr, f"Playing: {os.path.basename(next_track)}")
+                    if self.audio_service.load_and_play(next_track):
+                        self._show_message(stdscr, f"Playing: {os.path.basename(next_track)}")
+                        return False, next_track  # Return new file path
+                    else:
+                        self._show_message(stdscr, "Failed to load next track")
             case curses.KEY_LEFT:
                 self.logger.info("Previous track requested.")
                 prev_track = self.audio_service.get_previous_track()
                 if prev_track:
-                    self.audio_service.load_and_play(prev_track)
-                    self._show_message(stdscr, f"Playing: {os.path.basename(prev_track)}")
+                    if self.audio_service.load_and_play(prev_track):
+                        self._show_message(stdscr, f"Playing: {os.path.basename(prev_track)}")
+                        return False, prev_track  # Return new file path
+                    else:
+                        self._show_message(stdscr, "Failed to load previous track")
             case curses.KEY_UP:
                 self.logger.info("Increasing volume.")
                 self.audio_service.set_volume(self.audio_service.volume + 5)
@@ -173,7 +195,7 @@ class CursesMusicUI:
                 self.audio_service.set_volume(self.audio_service.volume - 5)
             case _:
                 self.logger.debug("Unrecognized key pressed.")
-        return False
+        return False, None
 
     def _browse_files(self, stdscr):
         """
