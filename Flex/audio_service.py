@@ -9,7 +9,10 @@ import random
 from pydub import AudioSegment
 import pyfftw  # For faster FFT operations
 
-from .config import FFMPEG_FOLDER
+try:
+    from .config import FFMPEG_FOLDER
+except ImportError:
+    from config import FFMPEG_FOLDER
 
 LOCAL_FFMPEG = os.path.join(FFMPEG_FOLDER, "ffmpeg.exe")
 LOCAL_FFPROBE = os.path.join(FFMPEG_FOLDER, "ffprobe.exe")
@@ -270,9 +273,14 @@ class AudioService:
         if frames_left <= 0:
             # End of file reached.
             self.logger.info("Reached end of audio (callback).")
-            # Trigger auto-advance if enabled
+            # Stop playing and trigger auto-advance if enabled
+            self.is_playing = False
             if self.auto_advance and self.track_finished_callback:
-                self.track_finished_callback()
+                # Schedule callback to run in main thread
+                try:
+                    self.track_finished_callback()
+                except Exception as e:
+                    self.logger.error(f"Error in track finished callback: {e}")
             return (None, pyaudio.paComplete)
 
         # Determine how many frames to send in this callback.
@@ -311,6 +319,19 @@ class AudioService:
 
         # Check if we've provided fewer frames than requested (end-of-file scenario).
         if frames_to_read < frame_count:
+            # Pad with silence if needed
+            silence_frames = frame_count - frames_to_read
+            silence = np.zeros((silence_frames, self.channels), dtype=np.float32)
+            silence_bytes = self._float_array_to_raw_bytes(silence.ravel())
+            out_bytes += silence_bytes
+            
+            # Mark as ending and trigger callback
+            self.is_playing = False
+            if self.auto_advance and self.track_finished_callback:
+                try:
+                    self.track_finished_callback()
+                except Exception as e:
+                    self.logger.error(f"Error in track finished callback: {e}")
             return (out_bytes, pyaudio.paComplete)
         else:
             return (out_bytes, pyaudio.paContinue)
@@ -668,3 +689,7 @@ class AudioService:
         """Enable/disable auto-advance to next track"""
         self.auto_advance = enabled
         self.logger.info(f"Auto-advance {'enabled' if enabled else 'disabled'}")
+
+    def get_auto_advance(self):
+        """Get current auto-advance state"""
+        return self.auto_advance
